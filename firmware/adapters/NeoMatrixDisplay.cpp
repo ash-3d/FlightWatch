@@ -29,6 +29,7 @@ Outputs: Visual output to LED matrix using double-buffered DMA.
 #include "config/UserConfiguration.h"
 #include "config/HardwareConfiguration.h"
 #include "config/TimingConfiguration.h"
+#include "images/flightwatch_logo.h"
 
 NeoMatrixDisplay::NeoMatrixDisplay() {}
 
@@ -721,6 +722,46 @@ void NeoMatrixDisplay::displayMessage(const String &message)
     const int16_t x = 0;
     const int16_t y = (_matrixHeight - charHeight) / 2;
     drawTextLine(x, y, line, textColor);
+    present();
+}
+
+void NeoMatrixDisplay::displayStartup()
+{
+    if (_matrix == nullptr)
+        return;
+
+    _matrix->fillScreen(0);
+
+    const int charWidth  = 6;
+    const int charHeight = 6;
+    const uint16_t textColor = _matrix->color565(
+        UserConfiguration::TEXT_COLOR_R,
+        UserConfiguration::TEXT_COLOR_G,
+        UserConfiguration::TEXT_COLOR_B);
+
+    // Draw logo (64x64 mono) centered
+    const int logoW = 64;
+    const int logoH = 64;
+    int16_t logoX = (_matrixWidth - logoW) / 2;
+    if (logoX < 0) logoX = 0;
+    int16_t logoY = (_matrixHeight - logoH) / 2;
+    if (logoY < 0) logoY = 0;
+    const uint8_t *logo = FLIGHTWATCH_LOGO_64x64;
+    for (int y = 0; y < logoH && (logoY + y) < _matrixHeight; ++y)
+    {
+        for (int x = 0; x < logoW && (logoX + x) < _matrixWidth; ++x)
+        {
+            // Each byte holds 8 pixels, MSB first
+            int byteIndex = (y * logoW + x) / 8;
+            int bitIndex = 7 - (x % 8);
+            bool white = (logo[byteIndex] >> bitIndex) & 0x01;
+            if (!white)
+            {
+                _matrix->drawPixel(logoX + x, logoY + y, textColor);
+            }
+        }
+    }
+
     present();
 }
 

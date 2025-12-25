@@ -66,7 +66,7 @@ The data for this project consists of two main data sources:
 
 ### Set your WiFi
 
-Enter your WiFi credentials into `WIFI_SSID` and `WIFI_PASSWORD` in [WiFiConfiguration.h](firmware/config/WiFiConfiguration.h)
+WiFi credentials are collected via WiFiManager captive portal. Adjust the portal SSID/password/timeouts in [WiFiConfiguration.h](firmware/config/WiFiConfiguration.h) if you want to change the defaults.
 
 ### Set your location
 
@@ -86,7 +86,7 @@ The firmware can be built and uploaded to the ESP32 using [PlatformIO](https://p
 
 2. **Configure your settings**:
    - Add your API keys to [APIConfiguration.h](firmware/config/APIConfiguration.h)
-   - Add your WiFi credentials to [WiFiConfiguration.h](firmware/config/WiFiConfiguration.h)
+   - (Optional) Adjust captive portal defaults in [WiFiConfiguration.h](firmware/config/WiFiConfiguration.h)
    - Set your location (and optional display preferences) in [UserConfiguration.h](firmware/config/UserConfiguration.h)
    - Adjust display hardware (pin, tile layout) in [HardwareConfiguration.h](firmware/config/HardwareConfiguration.h)
 

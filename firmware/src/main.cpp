@@ -9,8 +9,10 @@ Configuration: UserConfiguration (location/filters/colors), TimingConfiguration 
 #include <vector>
 #include <time.h>
 #include <WiFi.h>
+#include <WiFiManager.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <Preferences.h>
 #include "config/UserConfiguration.h"
 #include "config/WiFiConfiguration.h"
 #include "config/TimingConfiguration.h"
@@ -19,6 +21,12 @@ Configuration: UserConfiguration (location/filters/colors), TimingConfiguration 
 #include "core/FlightDataFetcher.h"
 #include "adapters/NeoMatrixDisplay.h"
 
+RTC_DATA_ATTR static uint32_t g_resetCounter = 0;
+#ifndef FW_BUILD_ID
+#define FW_BUILD_ID __DATE__ " " __TIME__
+#endif
+static const char *const BUILD_ID = FW_BUILD_ID;
+
 static OpenSkyFetcher g_openSky;
 static AeroAPIFetcher g_aeroApi;
 static FlightDataFetcher *g_fetcher = nullptr;
@@ -26,6 +34,31 @@ static NeoMatrixDisplay g_display;
 static std::vector<FlightInfo> g_lastFlights;
 
 static unsigned long g_lastFetchMs = 0;
+static bool g_doubleResetWindowArmed = false;
+static unsigned long g_doubleResetWindowStartMs = 0;
+
+static bool doubleResetDetected()
+{
+    g_resetCounter++;
+    if (g_resetCounter > 1)
+    {
+        g_resetCounter = 0;
+        return true;
+    }
+    g_doubleResetWindowArmed = true;
+    g_doubleResetWindowStartMs = millis();
+    return false;
+}
+
+static void serviceDoubleResetWindow()
+{
+    const unsigned long windowMs = WiFiConfiguration::DOUBLE_RESET_WINDOW_SECONDS * 1000UL;
+    if (g_doubleResetWindowArmed && millis() - g_doubleResetWindowStartMs >= windowMs)
+    {
+        g_resetCounter = 0;
+        g_doubleResetWindowArmed = false;
+    }
+}
 
 void setup()
 {
@@ -33,47 +66,94 @@ void setup()
     delay(200);
 
     g_display.initialize();
-    g_display.displayMessage(String("FlightWall"));
+    g_display.displayStartup();
+    delay(5000); // hold startup logo/text before entering WiFi setup
 
-    if (strlen(WiFiConfiguration::WIFI_SSID) > 0)
+    // Ensure clean STA mode before WiFiManager (mirrors Clockwise setup)
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(true);
+
+    // Force fresh portal after new firmware flash by comparing build id persisted in NVS
+    Preferences prefs;
+    prefs.begin("fwcfg", false);
+    String storedBuild = prefs.getString("build", "");
+    bool isNewBuild = storedBuild != BUILD_ID;
+
+    WiFiManager wifiManager;
+    wifiManager.setDebugOutput(false);
+    wifiManager.setConnectTimeout(WiFiConfiguration::CONNECT_TIMEOUT_SECONDS);
+    wifiManager.setTimeout(WiFiConfiguration::PORTAL_TIMEOUT_SECONDS);
+    wifiManager.setAPCallback([](WiFiManager *)
     {
-        WiFi.mode(WIFI_STA);
-        g_display.displayMessage(String("WiFi: ") + WiFiConfiguration::WIFI_SSID);
-        WiFi.begin(WiFiConfiguration::WIFI_SSID, WiFiConfiguration::WIFI_PASSWORD);
-        Serial.print("Connecting to WiFi");
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 50)
-        {
-            delay(200);
-            Serial.print(".");
-            attempts++;
-        }
-        Serial.println();
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            Serial.print("WiFi connected: ");
-            Serial.println(WiFi.localIP());
-            g_display.displayMessage(String("WiFi OK ") + WiFi.localIP().toString());
+        g_display.displayMessage(String("Setup: ") + WiFiConfiguration::PORTAL_SSID);
+    });
+    wifiManager.setSaveConfigCallback([]()
+    {
+        Serial.println("WiFiManager: credentials received, attempting connection");
+    });
 
-            // Set timezone for Berlin (CET/CEST with DST rules) and start NTP sync
-            configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
+    if (isNewBuild)
+    {
+        Serial.println("New firmware detected; clearing saved WiFi credentials");
+        wifiManager.resetSettings();
+        prefs.putString("build", BUILD_ID);
+    }
 
-            // Wait briefly for time to become valid (non-blocking loop)
-            struct tm t;
-            unsigned long waitStart = millis();
-            while (!getLocalTime(&t, 0) && millis() - waitStart < 3000)
-            {
-                delay(50);
-            }
+    bool doubleReset = doubleResetDetected();
+    bool wifiConnected = false;
 
-            delay(1000);
-            g_display.showLoading();
-        }
-        else
+    if (doubleReset)
+    {
+        Serial.println("Double reset detected; clearing WiFi credentials");
+        g_display.displayMessage("WiFi reset...");
+        wifiManager.resetSettings();
+        wifiConnected = wifiManager.startConfigPortal(WiFiConfiguration::PORTAL_SSID, WiFiConfiguration::PORTAL_PASSWORD);
+    }
+    else
+    {
+        g_display.displayMessage("WiFi connect");
+        wifiConnected = wifiManager.autoConnect(WiFiConfiguration::PORTAL_SSID, WiFiConfiguration::PORTAL_PASSWORD);
+
+        if (!wifiConnected)
         {
-            Serial.println("WiFi not connected; proceeding without network");
-            g_display.displayMessage(String("WiFi FAIL"));
+        Serial.print("Stored WiFi failed; status=");
+        Serial.println((int)WiFi.status());
+        Serial.println("Opening portal...");
+        g_display.displayMessage("Portal ready");
+        wifiConnected = wifiManager.startConfigPortal(WiFiConfiguration::PORTAL_SSID, WiFiConfiguration::PORTAL_PASSWORD);
+    }
+}
+
+    if (wifiConnected)
+    {
+        Serial.print("WiFi connected: ");
+        Serial.println(WiFi.localIP());
+        g_display.displayMessage(String("WiFi OK ") + WiFi.localIP().toString());
+
+        // Set timezone for Berlin (CET/CEST with DST rules) and start NTP sync
+        configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
+
+        // Wait briefly for time to become valid (non-blocking loop)
+        struct tm t;
+        unsigned long waitStart = millis();
+        while (!getLocalTime(&t, 0) && millis() - waitStart < 3000)
+        {
+            delay(50);
         }
+
+        // Show logo/text once WiFi is up
+        g_display.displayStartup();
+        delay(5000);
+
+        delay(1000);
+        g_display.showLoading();
+    }
+    else
+    {
+        Serial.print("WiFi not connected; status=");
+        Serial.println((int)WiFi.status());
+        Serial.println("Proceeding without network");
+        g_display.displayMessage(String("WiFi FAIL"));
     }
 
     g_fetcher = new FlightDataFetcher(&g_openSky, &g_aeroApi);
@@ -81,6 +161,8 @@ void setup()
 
 void loop()
 {
+    serviceDoubleResetWindow();
+
     const unsigned long intervalMs = TimingConfiguration::FETCH_INTERVAL_SECONDS * 1000UL;
     const unsigned long now = millis();
     if (now - g_lastFetchMs >= intervalMs)

@@ -16,6 +16,7 @@ public:
     void clear() override;
     void displayFlights(const std::vector<FlightInfo> &flights) override;
     void displayMessage(const String &message);
+    void displayStartup();
     void showLoading();
 
 private:
