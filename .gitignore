@@ -1,0 +1,4 @@
+misc
+.DS_Store
+.venv
+firmware/.pio
