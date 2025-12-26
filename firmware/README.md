@@ -31,3 +31,23 @@ This is a high-level overview of the firmware that powers TheFlightWall on ESP32
 ### Notes
 - OpenSky OAuth is required for `states/all`. Token auto-refreshes with a safety skew.
 - Display uses `FastLED_NeoMatrix` with WS2812B strips; adjust tiling/orientation in hardware config.
+
+## Project file architecture
+- `src/main.cpp`: Firmware entry, WiFi/captive portal, scheduling, background fetch task, display loop.
+- `core/`: `FlightDataFetcher` orchestrates state vector fetch + enrichment; glue between adapters.
+- `adapters/`: API/display implementations (`OpenSkyFetcher`, `AeroAPIFetcher`, `FlightWallFetcher`, `NeoMatrixDisplay`).
+- `models/`: Data structs for flights, airports, state vectors.
+- `config/`: Defaults and runtime settings (user, WiFi, timing, hardware, API).
+- `utils/`: Helpers (geo math, etc.).
+
+## Data flow
+- WiFi setup via captive portal (`flightwatch.local`) → settings saved to NVS → optional auto-restart.
+- Background fetch task (FreeRTOS) every `FETCH_INTERVAL_SECONDS`: OpenSky `states/all` (OAuth) → AeroAPI enrichment → FlightWall name lookups → `g_lastFlights` (mutex-protected).
+- Main loop ticks display ~40 FPS independent of fetches: copies latest flights → renders flight cards on HUB75 matrix (progress bar, marquees, metrics).
+- Settings server (MDNS + HTTP) serves `/` for config; changes persist via `RuntimeSettings`.
+
+## Deployment architecture
+- Single ESP32 (HUB75/Trinity) driving LED matrix; double-buffered rendering.
+- Network: outbound HTTPS to OpenSky OAuth + `states/all`, AeroAPI, and FlightWall CDN; local captive portal for first-time WiFi.
+- Storage: NVS for WiFi credentials, runtime settings (location, units, brightness, colors, API keys).
+- Runtime tasks: main UI loop + background fetch task to prevent display stalls during API calls.
