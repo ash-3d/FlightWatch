@@ -26,4 +26,8 @@ struct FlightInfo
     // Human-friendly display strings
     String airline_display_name_full;
     String aircraft_display_name_short;
+
+    // Live metrics from state vector
+    double baro_altitude_m = NAN; // meters
+    double velocity_mps = NAN;    // meters/second (ground speed)
 };

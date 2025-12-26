@@ -27,9 +27,22 @@ Outputs: Visual output to LED matrix using double-buffered DMA.
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "config/UserConfiguration.h"
+#include "config/RuntimeSettings.h"
 #include "config/HardwareConfiguration.h"
 #include "config/TimingConfiguration.h"
 #include "images/flightwatch_logo.h"
+
+namespace
+{
+    constexpr int CHAR_WIDTH = 6;
+    constexpr int CHAR_HEIGHT = 8;
+    constexpr int LINE_GAP = 2;
+    constexpr int MARQUEE_GAP_PX = 10;
+    constexpr unsigned long MARQUEE_FRAME_MS = 25; // 40 FPS target
+    constexpr int MARQUEE_SPEED_PX = 1;
+    constexpr int BORDER = 1;
+    constexpr int PROGRESS_BAR_HEIGHT = 2;
+}
 
 NeoMatrixDisplay::NeoMatrixDisplay() {}
 
@@ -68,7 +81,7 @@ bool NeoMatrixDisplay::initialize()
 
     _matrix->setTextWrap(false);
     _matrix->setTextSize(1); // smallest built-in font
-    _matrix->setBrightness8(UserConfiguration::DISPLAY_BRIGHTNESS);
+    _matrix->setBrightness8(RuntimeSettings::current().displayBrightness);
 
     runBootTest();
     clear();
@@ -244,9 +257,10 @@ bool NeoMatrixDisplay::fetchWeatherIfNeeded(float &outC, String &outSymbol, uint
     client.setInsecure();
     HTTPClient http;
 
+    const auto &cfg = RuntimeSettings::current();
     String url = String("https://api.open-meteo.com/v1/forecast?latitude=") +
-                 String(UserConfiguration::CENTER_LAT, 6) +
-                 "&longitude=" + String(UserConfiguration::CENTER_LON, 6) +
+                 String(cfg.weatherLat, 6) +
+                 "&longitude=" + String(cfg.weatherLon, 6) +
                  "&current=temperature_2m,weathercode";
 
     if (!http.begin(client, url))
@@ -425,43 +439,113 @@ void NeoMatrixDisplay::drawWeatherIcon(int16_t originX, int16_t originY, int wea
     drawUnknown();
 }
 
-void NeoMatrixDisplay::displaySingleFlightCard(const FlightInfo &f, size_t ordinal, size_t total)
+
+String NeoMatrixDisplay::flightCacheKey(const FlightInfo &f, size_t ordinal, size_t total) const
 {
-    // Text color
-    const uint16_t textColor = _matrix->color565(
-        UserConfiguration::TEXT_COLOR_R,
-        UserConfiguration::TEXT_COLOR_G,
-        UserConfiguration::TEXT_COLOR_B);
+    String key;
+    key.reserve(128);
+    key += f.ident;
+    key += '|';
+    key += f.ident_icao;
+    key += '|';
+    key += f.ident_iata;
+    key += '|';
+    key += f.operator_code;
+    key += '|';
+    key += f.operator_iata;
+    key += '|';
+    key += f.operator_icao;
+    key += '|';
+    key += f.airline_display_name_full;
+    key += '|';
+    key += f.aircraft_display_name_short;
+    key += '|';
+    key += f.aircraft_code;
+    key += '|';
+    key += f.origin.code_iata;
+    key += '|';
+    key += f.origin.code_icao;
+    key += '|';
+    key += f.destination.code_iata;
+    key += '|';
+    key += f.destination.code_icao;
+    key += '|';
+    key += String(ordinal);
+    key += '/';
+    key += String(total);
+    key += '|';
+    key += String(f.baro_altitude_m, 1);
+    key += '|';
+    key += String(f.velocity_mps, 1);
+    const auto &cfg = RuntimeSettings::current();
+    key += '|';
+    key += cfg.altitudeFeet ? String("ft") : String("m");
+    key += '|';
+    key += cfg.speedKts ? String("kts") : String("kmh");
+    return key;
+}
 
-    // Default 5x7 font with 1px spacing => approx 6x8 per char
-    const int charWidth  = 6;
-    const int charHeight = 8;
-    const int lineGap    = 2;
-    unsigned long now    = millis();
-
-    _matrix->fillScreen(0);
-
-    // Max characters that fit in one line (e.g. 32 / 6 ~= 10 chars on 64px wide display)
-    const int maxCols = _matrixWidth / charWidth;
-
-    // Airline: first word only, clipped to fit, drawn top-left
-    String airlineName = firstWord(chooseAirlineName(f));
-    airlineName = truncateToColumns(airlineName, maxCols);
-    int16_t airlineX = 0;
-    int16_t airlineY = 0;
-    drawTextLine(airlineX, airlineY, airlineName, textColor);
-
-    // Route (IATA preferred) centered
+void NeoMatrixDisplay::prepareFlightLayout(const FlightInfo &f, size_t ordinal, size_t total)
+{
+    const int viewWidth = _matrixWidth - 2 * BORDER;
+    const int viewHeight = _matrixHeight - 2 * BORDER;
+    const int maxCols = viewWidth / CHAR_WIDTH;
     String originCode = airportCodePreferred(f.origin);
     String destCode   = airportCodePreferred(f.destination);
-    String route      = originCode + String(" > ") + destCode;
-    route = truncateToColumns(route, maxCols);
-    int16_t routeX = (_matrixWidth - (int)route.length() * charWidth) / 2;
-    if (routeX < 0) routeX = 0;
-    int16_t routeY = charHeight + lineGap + 2;
-    drawTextLine(routeX, routeY, route, textColor);
 
-    // Aircraft maker + model
+    bool sameFlight = _layoutValid &&
+                      _lastLayoutOrdinal == ordinal &&
+                      _lastLayoutTotal == total &&
+                      _lastIdent == f.ident &&
+                      _lastIdentIata == f.ident_iata &&
+                      _lastIdentIcao == f.ident_icao &&
+                      _lastOriginCode == originCode &&
+                      _lastDestCode == destCode &&
+                      _lastAirlineFull == f.airline_display_name_full &&
+                      _lastOperatorIata == f.operator_iata &&
+                      _lastOperatorIcao == f.operator_icao &&
+                      _lastAircraftDisplay == f.aircraft_display_name_short &&
+                      _lastAircraftCode == f.aircraft_code;
+    if (sameFlight)
+    {
+        return;
+    }
+
+    _layoutKey = flightCacheKey(f, ordinal, total);
+    _layoutValid = true;
+    _lastLayoutOrdinal = ordinal;
+    _lastLayoutTotal = total;
+    _lastIdent = f.ident;
+    _lastIdentIata = f.ident_iata;
+    _lastIdentIcao = f.ident_icao;
+    _lastOriginCode = originCode;
+    _lastDestCode = destCode;
+    _lastAirlineFull = f.airline_display_name_full;
+    _lastOperatorIata = f.operator_iata;
+    _lastOperatorIcao = f.operator_icao;
+    _lastAircraftDisplay = f.aircraft_display_name_short;
+    _lastAircraftCode = f.aircraft_code;
+
+    _layout.airline = chooseAirlineName(f);
+    if (_layout.airline.length() == 0)
+    {
+        _layout.airline = String("Unknown");
+    }
+    _layout.airlineWidth = _layout.airline.length() * CHAR_WIDTH;
+    _layout.airlineY = BORDER + PROGRESS_BAR_HEIGHT + 1;
+    _airlineScrollActive = _layout.airlineWidth > viewWidth;
+    _airlineScrollX = BORDER;
+    _lastAirlineScrollMs = millis();
+
+    String routeGap = String("   "); // add extra spacing so arrow tip does not touch destination
+    _layout.route = truncateToColumns(originCode + routeGap + destCode, maxCols);
+    _layout.routeX = BORDER + (viewWidth - (int)_layout.route.length() * CHAR_WIDTH) / 2;
+    if (_layout.routeX < BORDER) _layout.routeX = BORDER;
+    _layout.routeY = _layout.airlineY + CHAR_HEIGHT + LINE_GAP + 2;
+    int originChars = originCode.length();
+    _layout.arrowX = _layout.routeX + originChars * CHAR_WIDTH + CHAR_WIDTH; // one character gap before arrow
+    _layout.arrowY = _layout.routeY; // fits within the 8px text row
+
     auto detectMaker = [&](const String &code, const String &display) -> String {
         String first = firstWord(display);
         String lower = first;
@@ -508,59 +592,288 @@ void NeoMatrixDisplay::displaySingleFlightCard(const FlightInfo &f, size_t ordin
     }
 
     String combined = maker.length() ? (maker + String(" ") + modelOnly) : modelOnly;
-    bool combinedFits = ((int)combined.length() * charWidth) <= _matrixWidth;
-    int16_t modelY = routeY + charHeight + lineGap;
+    bool combinedFits = ((int)combined.length() * CHAR_WIDTH) <= viewWidth;
+    int16_t modelY = _layout.routeY + CHAR_HEIGHT + LINE_GAP;
 
+    _layout.hasModel2 = false;
     if (combinedFits)
     {
-        String modelLine = truncateToColumns(combined, maxCols);
-        int16_t modelX = (_matrixWidth - (int)modelLine.length() * charWidth) / 2;
-        if (modelX < 0) modelX = 0;
-        drawTextLine(modelX, modelY, modelLine, textColor);
+        _layout.modelLine1 = truncateToColumns(combined, maxCols);
+        _layout.model1X = BORDER + (viewWidth - (int)_layout.modelLine1.length() * CHAR_WIDTH) / 2;
+        if (_layout.model1X < BORDER) _layout.model1X = BORDER;
+        _layout.model1Y = modelY;
     }
     else
     {
         String makerLine = maker.length() ? maker : firstWord(modelOnly);
         makerLine = truncateToColumns(makerLine, maxCols);
-        int16_t makerX = (_matrixWidth - (int)makerLine.length() * charWidth) / 2;
-        if (makerX < 0) makerX = 0;
-        drawTextLine(makerX, modelY, makerLine, textColor);
+        _layout.modelLine1 = makerLine;
+        _layout.model1X = BORDER + (viewWidth - (int)makerLine.length() * CHAR_WIDTH) / 2;
+        if (_layout.model1X < BORDER) _layout.model1X = BORDER;
+        _layout.model1Y = modelY;
 
         String modelLine = truncateToColumns(modelOnly, maxCols);
-        int16_t modelX2 = (_matrixWidth - (int)modelLine.length() * charWidth) / 2;
-        if (modelX2 < 0) modelX2 = 0;
-        int16_t modelY2 = modelY + charHeight + 1;
-        if (modelY2 + charHeight <= _matrixHeight)
+        _layout.modelLine2 = modelLine;
+        _layout.model2X = BORDER + (viewWidth - (int)modelLine.length() * CHAR_WIDTH) / 2;
+        if (_layout.model2X < BORDER) _layout.model2X = BORDER;
+        _layout.model2Y = modelY + CHAR_HEIGHT + 1;
+        _layout.hasModel2 = (_layout.model2Y + CHAR_HEIGHT <= (_matrixHeight - BORDER));
+    }
+
+    String originFull = airportCity(f.origin);
+    originFull.trim();
+    if (!originFull.length())
+        originFull = String("---");
+    String destFull = airportCity(f.destination);
+    destFull.trim();
+    if (!destFull.length())
+        destFull = String("---");
+
+    String cityLine = originFull + String("   ") + destFull;
+    const int originCityChars = originFull.length();
+    const int destCityChars = destFull.length();
+    const int cityGapChars = 3;
+
+    auto chooseCallsign = [&]() -> String {
+        if (f.ident_iata.length()) return f.ident_iata;
+        if (f.ident.length()) return f.ident;
+        if (f.ident_icao.length()) return f.ident_icao;
+        return String("--");
+    };
+
+    String altStr("--");
+    if (!isnan(f.baro_altitude_m))
+    {
+        const auto &cfg = RuntimeSettings::current();
+        if (cfg.altitudeFeet)
         {
-            drawTextLine(modelX2, modelY2, modelLine, textColor);
+            long altFeet = lround(f.baro_altitude_m * 3.28084);
+            altStr = String(altFeet) + String("ft");
+        }
+        else
+        {
+            long altMeters = lround(f.baro_altitude_m);
+            altStr = String(altMeters) + String("m");
         }
     }
 
-    // Airport names at bottom-left (city focused)
-    String originName = firstWord(airportCity(f.origin));
-    String destName   = firstWord(airportCity(f.destination));
-    originName = truncateToColumns(originName, maxCols);
-    destName   = truncateToColumns(destName, maxCols);
-
-    int16_t bottomY1 = _matrixHeight - (2 * charHeight) - lineGap;
-    if (bottomY1 < 0) bottomY1 = 0;
-    int16_t bottomY2 = bottomY1 + charHeight + 1;
-    drawTextLine(0, bottomY1, originName, textColor);
-    if (bottomY2 + charHeight <= _matrixHeight)
+    String speedStr("--");
+    if (!isnan(f.velocity_mps))
     {
-        drawTextLine(0, bottomY2, destName, textColor);
+        const auto &cfg = RuntimeSettings::current();
+        if (cfg.speedKts)
+        {
+            long kts = lround(f.velocity_mps * 1.943844f);
+            speedStr = String(kts) + String("kt");
+        }
+        else
+        {
+            long kmh = lround(f.velocity_mps * 3.6);
+            speedStr = String(kmh) + String("km/h");
+        }
     }
 
-    // Flight counter (e.g., "1/3") bottom-right
+    String callsign = chooseCallsign();
+    String metricsLine = callsign + String("  -  ") + altStr + String("  -  ") + speedStr;
+
+    int16_t bottomY1 = BORDER + viewHeight - (2 * CHAR_HEIGHT) - LINE_GAP;
+    if (bottomY1 < BORDER) bottomY1 = BORDER;
+    _layout.originY = bottomY1;
+    _layout.destY = bottomY1 + CHAR_HEIGHT + 1;
+    _layout.showDest = (_layout.destY + CHAR_HEIGHT <= (_matrixHeight - BORDER));
+
+    _layout.originName = cityLine;
+    _layout.destName   = metricsLine;
+
+    _layout.originWidth = _layout.originName.length() * CHAR_WIDTH;
+    _layout.destWidth = _layout.destName.length() * CHAR_WIDTH;
+    _layout.originCityChars = originCityChars;
+    _layout.destCityChars = destCityChars;
+    _layout.cityArrowOffset = originCityChars * CHAR_WIDTH + CHAR_WIDTH; // one character gap after origin
+    _layout.originScrollActive = _layout.originWidth > viewWidth;
+    _layout.destScrollActive = _layout.showDest && (_layout.destWidth > viewWidth);
+    _originScrollX = BORDER;
+    _destScrollX = BORDER;
+    _lastCityScrollMs = millis();
+}
+
+void NeoMatrixDisplay::updateAirlineScroll(unsigned long now)
+{
+    if (!_airlineScrollActive || !_layoutValid)
+        return;
+
+    if (_lastAirlineScrollMs == 0)
+    {
+        _lastAirlineScrollMs = now;
+    }
+
+    if (now <= _lastAirlineScrollMs)
+        return;
+
+    unsigned long delta = now - _lastAirlineScrollMs;
+    if (delta < MARQUEE_FRAME_MS)
+        return;
+
+    unsigned long steps = delta / MARQUEE_FRAME_MS;
+    _lastAirlineScrollMs += steps * MARQUEE_FRAME_MS;
+
+    const int viewWidth = _matrixWidth - 2 * BORDER;
+
+    _airlineScrollX -= (int16_t)(steps * MARQUEE_SPEED_PX);
+    int16_t reset = BORDER + viewWidth + MARQUEE_GAP_PX;
+    int16_t minX = BORDER - (_layout.airlineWidth + MARQUEE_GAP_PX);
+    if (_airlineScrollX < minX)
+    {
+        _airlineScrollX = reset;
+    }
+}
+
+void NeoMatrixDisplay::updateCityScrolls(unsigned long now)
+{
+    bool anyScroll = (_layout.originScrollActive || _layout.destScrollActive);
+    if (!anyScroll || !_layoutValid)
+        return;
+
+    const int viewWidth = _matrixWidth - 2 * BORDER;
+
+    if (_lastCityScrollMs == 0)
+    {
+        _lastCityScrollMs = now;
+    }
+
+    if (now <= _lastCityScrollMs)
+        return;
+
+    unsigned long delta = now - _lastCityScrollMs;
+    if (delta < MARQUEE_FRAME_MS)
+        return;
+
+    unsigned long steps = delta / MARQUEE_FRAME_MS;
+    _lastCityScrollMs += steps * MARQUEE_FRAME_MS;
+
+    auto advance = [&](int16_t &x, int16_t width) {
+        x -= (int16_t)(steps * MARQUEE_SPEED_PX);
+        int16_t reset = BORDER + viewWidth + MARQUEE_GAP_PX;
+        int16_t minX = BORDER - (width + MARQUEE_GAP_PX);
+        if (x < minX)
+        {
+            x = reset;
+        }
+    };
+
+    if (_layout.originScrollActive)
+    {
+        advance(_originScrollX, _layout.originWidth);
+    }
+    if (_layout.destScrollActive)
+    {
+        advance(_destScrollX, _layout.destWidth);
+    }
+}
+
+void NeoMatrixDisplay::displaySingleFlightCard(const FlightInfo &f, size_t ordinal, size_t total)
+{
+    const uint16_t textColor = _matrix->color565(
+        UserConfiguration::TEXT_COLOR_R,
+        UserConfiguration::TEXT_COLOR_G,
+        UserConfiguration::TEXT_COLOR_B);
+    const uint16_t originAccent = _matrix->color565(80, 200, 200); // soft teal
+    const uint16_t destAccent = _matrix->color565(255, 200, 80);   // soft amber
+    const uint16_t arrowColor = _matrix->color565(255, 255, 255);  // keep arrows white
+    const uint16_t dimTextColor = _matrix->color565(
+        UserConfiguration::TEXT_COLOR_R / 3,
+        UserConfiguration::TEXT_COLOR_G / 3,
+        UserConfiguration::TEXT_COLOR_B / 3);
+    unsigned long now    = millis();
+
+    prepareFlightLayout(f, ordinal, total);
+    updateAirlineScroll(now);
+    updateCityScrolls(now);
+
+    _matrix->fillScreen(0);
+
+    // Progress bar at top showing current flight when multiple flights
+    const int viewWidth = _matrixWidth - 2 * BORDER;
     if (total > 1)
     {
-        String counter = String(ordinal) + String("/") + String(total);
-        int counterWidth = counter.length() * charWidth;
-        int16_t counterX = _matrixWidth - counterWidth;
-        if (counterX < 0) counterX = 0;
-        int16_t counterY = _matrixHeight - charHeight;
-        drawTextLine(counterX, counterY, counter, textColor);
+        const int gap = 1;
+        const int available = viewWidth - gap * (int)(total - 1);
+        int baseWidth = available / (int)total;
+        int remainder = available - baseWidth * (int)total;
+        int16_t segmentX = BORDER;
+        for (size_t i = 0; i < total; ++i)
+        {
+            int segWidth = baseWidth + (remainder > 0 ? 1 : 0);
+            if (remainder > 0) remainder--;
+            uint16_t color = (i == (ordinal - 1)) ? textColor : dimTextColor;
+            _matrix->fillRect(segmentX, BORDER, segWidth, PROGRESS_BAR_HEIGHT, color);
+            segmentX += segWidth + gap;
+        }
     }
+
+    int16_t airlineX = _airlineScrollActive ? _airlineScrollX : BORDER;
+    drawTextLine(airlineX, _layout.airlineY, _layout.airline, textColor);
+    if (_airlineScrollActive)
+    {
+        int16_t repeatX = airlineX + _layout.airlineWidth + MARQUEE_GAP_PX;
+        if (repeatX < (_matrixWidth - BORDER))
+        {
+            drawTextLine(repeatX, _layout.airlineY, _layout.airline, textColor);
+        }
+    }
+
+    // Draw route with per-segment colors
+    int16_t routeDestX = _layout.routeX + (int16_t)(_lastOriginCode.length() * CHAR_WIDTH) + (int16_t)(3 * CHAR_WIDTH);
+    drawTextLine(_layout.routeX, _layout.routeY, _lastOriginCode, originAccent);
+    auto drawArrow = [&](int16_t x, int16_t y, uint16_t color) {
+        // Solid right-pointing triangle, 6px wide, 7px tall
+        _matrix->fillTriangle(
+            x,     y,          // point A
+            x,     y + 7,      // point B
+            x + 6, y + 3,      // tip
+            color);
+    };
+    drawArrow(_layout.arrowX, _layout.arrowY, arrowColor);
+    drawTextLine(routeDestX, _layout.routeY, _lastDestCode, destAccent);
+    drawTextLine(_layout.model1X, _layout.model1Y, _layout.modelLine1, textColor);
+    if (_layout.hasModel2)
+    {
+        drawTextLine(_layout.model2X, _layout.model2Y, _layout.modelLine2, textColor);
+    }
+
+    int16_t originX = _layout.originScrollActive ? _originScrollX : BORDER;
+    const int16_t cityDestOffset = (int16_t)(_layout.originCityChars * CHAR_WIDTH) + (int16_t)(3 * CHAR_WIDTH);
+
+    drawTextLine(originX, _layout.originY, _layout.originName.substring(0, _layout.originCityChars), originAccent);
+    drawArrow(originX + _layout.cityArrowOffset, _layout.originY, arrowColor);
+    int16_t cityDestX = originX + cityDestOffset;
+    drawTextLine(cityDestX, _layout.originY, _layout.originName.substring(_layout.originCityChars + 3), destAccent);
+    if (_layout.originScrollActive)
+    {
+        int16_t repeatX = originX + _layout.originWidth + MARQUEE_GAP_PX;
+        if (repeatX < (_matrixWidth - BORDER))
+        {
+            drawTextLine(repeatX, _layout.originY, _layout.originName.substring(0, _layout.originCityChars), originAccent);
+            drawArrow(repeatX + _layout.cityArrowOffset, _layout.originY, arrowColor);
+            int16_t cityDestX2 = repeatX + cityDestOffset;
+            drawTextLine(cityDestX2, _layout.originY, _layout.originName.substring(_layout.originCityChars + 3), destAccent);
+        }
+    }
+
+    if (_layout.showDest)
+    {
+        int16_t destX = _layout.destScrollActive ? _destScrollX : BORDER;
+        drawTextLine(destX, _layout.destY, _layout.destName, textColor);
+        if (_layout.destScrollActive)
+        {
+            int16_t repeatX = destX + _layout.destWidth + MARQUEE_GAP_PX;
+            if (repeatX < (_matrixWidth - BORDER))
+            {
+                drawTextLine(repeatX, _layout.destY, _layout.destName, textColor);
+            }
+        }
+    }
+
 }
 
 void NeoMatrixDisplay::displayFlights(const std::vector<FlightInfo> &flights)
@@ -570,11 +883,11 @@ void NeoMatrixDisplay::displayFlights(const std::vector<FlightInfo> &flights)
 
     if (flights.empty())
     {
+        _layoutValid = false;
+        _layoutKey = String();
         displayLoadingScreen();
         return;
     }
-
-    _matrix->fillScreen(0);
 
     const unsigned long now        = millis();
     const unsigned long intervalMs = TimingConfiguration::DISPLAY_CYCLE_SECONDS * 1000UL;
@@ -695,8 +1008,9 @@ void NeoMatrixDisplay::displayLoadingScreen()
     int16_t dateY = _matrixHeight - charHeight;
     int16_t dayY = dateY - charHeight - lineGap;
     if (dayY < 0) dayY = 0;
-    drawTextLine(0, dayY, dayStr, boisenberry);
-    drawTextLine(0, dateY, dateStr, lavender);
+    const int16_t dateX = 1; // nudge right to avoid enclosure lip
+    drawTextLine(dateX, dayY, dayStr, boisenberry);
+    drawTextLine(dateX, dateY, dateStr, lavender);
 
     present();
 }

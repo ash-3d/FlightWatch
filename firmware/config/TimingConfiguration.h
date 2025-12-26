@@ -8,5 +8,5 @@ namespace TimingConfiguration
     static const uint32_t FETCH_INTERVAL_SECONDS = 30; // seconds
 
     // Display cycling configuration
-    static const uint32_t DISPLAY_CYCLE_SECONDS = 3; // seconds per flight when multiple flights
+    static const uint32_t DISPLAY_CYCLE_SECONDS = 7; // seconds per flight when multiple flights
 }

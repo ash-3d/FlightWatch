@@ -8,6 +8,7 @@ Input: flight ident (e.g., callsign).
 Output: Populates FlightInfo on success and returns true.
 */
 #include "adapters/AeroAPIFetcher.h"
+#include "config/RuntimeSettings.h"
 
 static String safeGetString(JsonVariantConst v, const char *key)
 {
@@ -19,7 +20,8 @@ static String safeGetString(JsonVariantConst v, const char *key)
 
 bool AeroAPIFetcher::fetchFlightInfo(const String &flightIdent, FlightInfo &outInfo)
 {
-    if (strlen(APIConfiguration::AEROAPI_KEY) == 0)
+    const auto &cfg = RuntimeSettings::current();
+    if (cfg.aeroApiKey.length() == 0)
     {
         Serial.println("AeroAPIFetcher: No API key configured");
         return false;
@@ -34,7 +36,7 @@ bool AeroAPIFetcher::fetchFlightInfo(const String &flightIdent, FlightInfo &outI
     HTTPClient http;
     String url = String(APIConfiguration::AEROAPI_BASE_URL) + "/flights/" + flightIdent;
     http.begin(client, url);
-    http.addHeader("x-apikey", APIConfiguration::AEROAPI_KEY);
+    http.addHeader("x-apikey", cfg.aeroApiKey);
     http.addHeader("Accept", "application/json");
 
     int code = http.GET();

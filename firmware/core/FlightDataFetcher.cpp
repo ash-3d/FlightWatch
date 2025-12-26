@@ -7,7 +7,7 @@ Flow:
 Output: Returns count of enriched flights and fills outStates/outFlights.
 */
 #include "core/FlightDataFetcher.h"
-#include "config/UserConfiguration.h"
+#include "config/RuntimeSettings.h"
 #include "adapters/FlightWallFetcher.h"
 
 FlightDataFetcher::FlightDataFetcher(BaseStateVectorFetcher *stateFetcher,
@@ -20,10 +20,11 @@ size_t FlightDataFetcher::fetchFlights(std::vector<StateVector> &outStates,
     outStates.clear();
     outFlights.clear();
 
+    const auto &cfg = RuntimeSettings::current();
     bool ok = _stateFetcher->fetchStateVectors(
-        UserConfiguration::CENTER_LAT,
-        UserConfiguration::CENTER_LON,
-        UserConfiguration::RADIUS_KM,
+        cfg.centerLat,
+        cfg.centerLon,
+        cfg.radiusKm,
         outStates);
     if (!ok)
         return 0;
@@ -38,6 +39,10 @@ size_t FlightDataFetcher::fetchFlights(std::vector<StateVector> &outStates,
         FlightInfo info;
         if (_flightFetcher->fetchFlightInfo(s.callsign, info))
         {
+            // Carry forward live metrics from the state vector
+            info.baro_altitude_m = s.baro_altitude;
+            info.velocity_mps = s.velocity;
+
             FlightWallFetcher fw;
             if (info.operator_icao.length())
             {
