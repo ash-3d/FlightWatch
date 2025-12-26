@@ -813,14 +813,6 @@ void NeoMatrixDisplay::displaySingleFlightCard(const FlightInfo &f, size_t ordin
 
     int16_t airlineX = _airlineScrollActive ? _airlineScrollX : BORDER;
     drawTextLine(airlineX, _layout.airlineY, _layout.airline, textColor);
-    if (_airlineScrollActive)
-    {
-        int16_t repeatX = airlineX + _layout.airlineWidth + MARQUEE_GAP_PX;
-        if (repeatX < (_matrixWidth - BORDER))
-        {
-            drawTextLine(repeatX, _layout.airlineY, _layout.airline, textColor);
-        }
-    }
 
     // Draw route with per-segment colors
     int16_t routeDestX = _layout.routeX + (int16_t)(_lastOriginCode.length() * CHAR_WIDTH) + (int16_t)(3 * CHAR_WIDTH);
@@ -848,30 +840,10 @@ void NeoMatrixDisplay::displaySingleFlightCard(const FlightInfo &f, size_t ordin
     drawArrow(originX + _layout.cityArrowOffset, _layout.originY, arrowColor);
     int16_t cityDestX = originX + cityDestOffset;
     drawTextLine(cityDestX, _layout.originY, _layout.originName.substring(_layout.originCityChars + 3), destAccent);
-    if (_layout.originScrollActive)
-    {
-        int16_t repeatX = originX + _layout.originWidth + MARQUEE_GAP_PX;
-        if (repeatX < (_matrixWidth - BORDER))
-        {
-            drawTextLine(repeatX, _layout.originY, _layout.originName.substring(0, _layout.originCityChars), originAccent);
-            drawArrow(repeatX + _layout.cityArrowOffset, _layout.originY, arrowColor);
-            int16_t cityDestX2 = repeatX + cityDestOffset;
-            drawTextLine(cityDestX2, _layout.originY, _layout.originName.substring(_layout.originCityChars + 3), destAccent);
-        }
-    }
-
     if (_layout.showDest)
     {
         int16_t destX = _layout.destScrollActive ? _destScrollX : BORDER;
         drawTextLine(destX, _layout.destY, _layout.destName, textColor);
-        if (_layout.destScrollActive)
-        {
-            int16_t repeatX = destX + _layout.destWidth + MARQUEE_GAP_PX;
-            if (repeatX < (_matrixWidth - BORDER))
-            {
-                drawTextLine(repeatX, _layout.destY, _layout.destName, textColor);
-            }
-        }
     }
 
 }

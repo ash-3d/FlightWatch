@@ -16,6 +16,12 @@ Configuration: UserConfiguration (location/filters/colors), TimingConfiguration 
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ESP.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
+#ifndef APP_CPU_NUM
+#define APP_CPU_NUM 1
+#endif
 #include "config/UserConfiguration.h"
 #include "config/RuntimeSettings.h"
 #include "config/WiFiConfiguration.h"
@@ -38,10 +44,42 @@ static AeroAPIFetcher g_aeroApi;
 static FlightDataFetcher *g_fetcher = nullptr;
 static NeoMatrixDisplay g_display;
 static std::vector<FlightInfo> g_lastFlights;
+static SemaphoreHandle_t g_flightsMutex = nullptr;
+static TaskHandle_t g_fetchTaskHandle = nullptr;
 
 static unsigned long g_lastFetchMs = 0;
 static bool g_doubleResetWindowArmed = false;
 static unsigned long g_doubleResetWindowStartMs = 0;
+
+static void fetchTask(void *param)
+{
+    const TickType_t loopDelay = pdMS_TO_TICKS(50); // keep responsive while waiting for interval
+    while (true)
+    {
+        const unsigned long intervalMs = TimingConfiguration::FETCH_INTERVAL_SECONDS * 1000UL;
+        const unsigned long now = millis();
+        if (g_fetcher != nullptr && now - g_lastFetchMs >= intervalMs)
+        {
+            g_lastFetchMs = now;
+
+            std::vector<StateVector> states;
+            std::vector<FlightInfo> flights;
+            size_t enriched = g_fetcher->fetchFlights(states, flights);
+
+            Serial.print("OpenSky state vectors: ");
+            Serial.println((int)states.size());
+            Serial.print("AeroAPI enriched flights: ");
+            Serial.println((int)enriched);
+
+            if (g_flightsMutex && xSemaphoreTake(g_flightsMutex, pdMS_TO_TICKS(200)))
+            {
+                g_lastFlights = flights;
+                xSemaphoreGive(g_flightsMutex);
+            }
+        }
+        vTaskDelay(loopDelay);
+    }
+}
 
 static String htmlEscape(const String &in)
 {
@@ -205,6 +243,7 @@ void setup()
     delay(200);
 
     RuntimeSettings::load();
+    g_flightsMutex = xSemaphoreCreateMutex();
 
     g_display.initialize();
     g_display.displayStartup();
@@ -300,68 +339,35 @@ void setup()
     }
 
     g_fetcher = new FlightDataFetcher(&g_openSky, &g_aeroApi);
+    if (g_fetchTaskHandle == nullptr)
+    {
+        xTaskCreatePinnedToCore(
+            fetchTask,
+            "fetchTask",
+            8192,
+            nullptr,
+            1,
+            &g_fetchTaskHandle,
+            APP_CPU_NUM);
+    }
 }
 
 void loop()
 {
     serviceDoubleResetWindow();
 
-    const unsigned long intervalMs = TimingConfiguration::FETCH_INTERVAL_SECONDS * 1000UL;
     const unsigned long now = millis();
-    if (now - g_lastFetchMs >= intervalMs)
+
+    // Copy latest flights under mutex to avoid blocking display during fetch
+    std::vector<FlightInfo> flightsCopy;
+    if (g_flightsMutex && xSemaphoreTake(g_flightsMutex, pdMS_TO_TICKS(5)))
     {
-        g_lastFetchMs = now;
-
-        std::vector<StateVector> states;
-        std::vector<FlightInfo> flights;
-        size_t enriched = g_fetcher->fetchFlights(states, flights);
-
-        Serial.print("OpenSky state vectors: ");
-        Serial.println((int)states.size());
-        Serial.print("AeroAPI enriched flights: ");
-        Serial.println((int)enriched);
-
-        for (const auto &s : states)
-        {
-            Serial.print(" ");
-            Serial.print(s.callsign);
-            Serial.print(" @ ");
-            Serial.print(s.distance_km, 1);
-            Serial.print("km bearing ");
-            Serial.println(s.bearing_deg, 1);
-        }
-
-        for (const auto &f : flights)
-        {
-            Serial.println("=== FLIGHT INFO ===");
-            Serial.print("Ident: ");
-            Serial.println(f.ident);
-            Serial.print("Ident ICAO: ");
-            Serial.println(f.ident_icao);
-            Serial.print("Ident IATA: ");
-            Serial.println(f.ident_iata);
-            Serial.print("Airline: ");
-            Serial.println(f.airline_display_name_full);
-            Serial.print("Aircraft: ");
-            Serial.println(f.aircraft_display_name_short.length() ? f.aircraft_display_name_short : f.aircraft_code);
-            Serial.print("Operator Code: ");
-            Serial.println(f.operator_code);
-            Serial.print("Operator ICAO: ");
-            Serial.println(f.operator_icao);
-            Serial.print("Operator IATA: ");
-            Serial.println(f.operator_iata);
-
-            Serial.println("--- Origin ---");
-            Serial.print("Code ICAO: ");
-            Serial.println(f.origin.code_icao);
-
-            Serial.println("--- Destination ---");
-            Serial.print("Code ICAO: ");
-            Serial.println(f.destination.code_icao);
-            Serial.println("===================");
-        }
-
-        g_lastFlights = flights;
+        flightsCopy = g_lastFlights;
+        xSemaphoreGive(g_flightsMutex);
+    }
+    else
+    {
+        flightsCopy = g_lastFlights; // fallback if mutex unavailable
     }
 
     // Refresh display frequently so scrolling/cycling can progress independently of fetch cadence
@@ -370,7 +376,7 @@ void loop()
     if (now - lastDisplayTickMs >= DISPLAY_TICK_MS)
     {
         lastDisplayTickMs = now;
-        g_display.displayFlights(g_lastFlights);
+        g_display.displayFlights(flightsCopy);
     }
     g_server.handleClient();
     delay(10);
