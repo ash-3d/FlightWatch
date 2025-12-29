@@ -1,0 +1,16 @@
+FlightWatch Firmware - Third-Party Notices
+
+This product includes software developed by the following projects. Licenses are permissive (MIT/BSD/Apache-2.0 style) unless noted; see each project’s repository for full text. Copyrights remain with their respective owners.
+
+- Espressif ESP32 Arduino Core (Arduino-ESP32) — Apache-2.0
+- WiFiManager — MIT License
+- ArduinoJson — MIT License
+- FastLED — MIT License
+- ESP32-HUB75-MatrixPanel-I2S-DMA — Apache-2.0
+- Adafruit-GFX-Library — BSD (Adafruit)
+- WebServer / ESPmDNS / WiFi libraries — part of ESP32 Arduino Core (Apache-2.0)
+- FreeRTOS (bundled with ESP32 core) — MIT License
+- Based on and improves upon TheFlightWall (AxisNimble) — Apache-2.0
+- Images/graphics included in firmware remain the property of their authors; ensure your usage is licensed for distribution.
+
+API keys for OpenSky and AeroAPI are supplied by end users; they are not distributed with this product. Use of those services is subject to their respective terms.

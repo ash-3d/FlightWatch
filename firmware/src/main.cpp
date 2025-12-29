@@ -48,8 +48,85 @@ static SemaphoreHandle_t g_flightsMutex = nullptr;
 static TaskHandle_t g_fetchTaskHandle = nullptr;
 
 static unsigned long g_lastFetchMs = 0;
+static unsigned long g_lastWifiCheckMs = 0;
 static bool g_doubleResetWindowArmed = false;
 static unsigned long g_doubleResetWindowStartMs = 0;
+
+static void netDiag()
+{
+    Serial.println("--- net diag ---");
+    Serial.printf("WiFi.status: %d (WL_CONNECTED=3)\n", WiFi.status());
+    Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+    Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("GW: %s\n", WiFi.gatewayIP().toString().c_str());
+    Serial.printf("DNS: %s / %s\n",
+                  WiFi.dnsIP(0).toString().c_str(),
+                  WiFi.dnsIP(1).toString().c_str());
+
+    IPAddress resolved;
+    bool dnsOk = WiFi.hostByName("google.com", resolved) == 1;
+    Serial.printf("hostByName(google.com): %s (%s)\n",
+                  dnsOk ? "OK" : "FAIL",
+                  dnsOk ? resolved.toString().c_str() : "-");
+
+    WiFiClient client;
+    bool tcpOk = client.connect("1.1.1.1", 80);
+    Serial.printf("TCP to 1.1.1.1:80: %s\n", tcpOk ? "OK" : "FAIL");
+    if (tcpOk)
+    {
+        client.stop();
+    }
+    Serial.println("--- end net diag ---");
+}
+
+static void maybeLogNetDiag(size_t stateCount, size_t flightCount)
+{
+    static int consecutiveEmpty = 0;
+    static unsigned long lastDiagMs = 0;
+    const unsigned long now = millis();
+
+    if (stateCount == 0 && flightCount == 0)
+    {
+        consecutiveEmpty++;
+    }
+    else
+    {
+        consecutiveEmpty = 0;
+    }
+
+    const bool wifiDown = WiFi.status() != WL_CONNECTED;
+    const bool dataStuck = consecutiveEmpty >= 2;
+    const unsigned long DIAG_COOLDOWN_MS = 60000UL;
+
+    if ((wifiDown || dataStuck) && (now - lastDiagMs >= DIAG_COOLDOWN_MS))
+    {
+        Serial.println(wifiDown
+                           ? "NetDiag: WiFi disconnected; dumping network status"
+                           : "NetDiag: No flights/weather twice in a row; dumping network status");
+        netDiag();
+        lastDiagMs = now;
+    }
+}
+
+static void ensureWifiConnected()
+{
+    const unsigned long now = millis();
+    const unsigned long CHECK_EVERY_MS = 10000;
+    if (now - g_lastWifiCheckMs < CHECK_EVERY_MS)
+        return;
+    g_lastWifiCheckMs = now;
+
+    bool badStatus = (WiFi.status() != WL_CONNECTED);
+    bool missingIp = (WiFi.localIP().toString() == "0.0.0.0");
+    if (badStatus || missingIp)
+    {
+        Serial.println("WiFi watchdog: connection lost; attempting reconnect");
+        Serial.printf("Current status=%d, ip=%s\n", (int)WiFi.status(), WiFi.localIP().toString().c_str());
+        WiFi.disconnect(true);
+        delay(200);
+        WiFi.begin(); // reconnect using stored credentials
+    }
+}
 
 static void fetchTask(void *param)
 {
@@ -58,6 +135,7 @@ static void fetchTask(void *param)
     {
         const unsigned long intervalMs = TimingConfiguration::FETCH_INTERVAL_SECONDS * 1000UL;
         const unsigned long now = millis();
+        ensureWifiConnected();
         if (g_fetcher != nullptr && now - g_lastFetchMs >= intervalMs)
         {
             g_lastFetchMs = now;
@@ -70,6 +148,7 @@ static void fetchTask(void *param)
             Serial.println((int)states.size());
             Serial.print("AeroAPI enriched flights: ");
             Serial.println((int)enriched);
+            maybeLogNetDiag(states.size(), flights.size());
 
             if (g_flightsMutex && xSemaphoreTake(g_flightsMutex, pdMS_TO_TICKS(200)))
             {
