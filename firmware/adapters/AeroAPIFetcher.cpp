@@ -106,5 +106,17 @@ bool AeroAPIFetcher::fetchFlightInfo(const String &flightIdent, FlightInfo &outI
         outInfo.destination.name = safeGetString(d, "name");
     }
 
+    // Debug: log operator fields a few times to verify presence/format.
+    static int s_opLogCount = 0;
+    if (s_opLogCount < 5)
+    {
+        Serial.printf("AeroAPI debug ident=%s operator_icao=%s operator=%s aircraft_type=%s\n",
+                      flightIdent.c_str(),
+                      outInfo.operator_icao.c_str(),
+                      outInfo.operator_code.c_str(),
+                      outInfo.aircraft_code.c_str());
+        s_opLogCount++;
+    }
+
     return true;
 }

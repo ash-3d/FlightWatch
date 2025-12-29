@@ -3,12 +3,92 @@ Purpose: Orchestrate fetching and enrichment of flight data for display.
 Flow:
 1) Use BaseStateVectorFetcher to fetch nearby state vectors by geo filter.
 2) For each callsign, use BaseFlightFetcher (e.g., AeroAPI) to retrieve FlightInfo.
-3) Enrich names via FlightWallFetcher (airline/aircraft display names).
+3) Enrich names using AeroAPI data when present, with embedded lookup tables (no CDN dependency).
 Output: Returns count of enriched flights and fills outStates/outFlights.
 */
 #include "core/FlightDataFetcher.h"
 #include "config/RuntimeSettings.h"
-#include "adapters/FlightWallFetcher.h"
+#include <strings.h>
+
+struct LookupEntry { const char *icao; const char *name; };
+
+// Generated full tables (airlines/aircraft) live here; regenerate via tools/generate_lookup_header.py.
+#include "LookupTables.generated.h"
+
+static String lookupFromTable(const LookupEntry *table, size_t count, const String &icao)
+{
+    if (icao.length() == 0 || count == 0)
+        return String("");
+
+    int low = 0;
+    int high = static_cast<int>(count) - 1;
+    while (low <= high)
+    {
+        int mid = low + ((high - low) / 2);
+        int cmp = strcasecmp(icao.c_str(), table[mid].icao);
+        if (cmp == 0)
+        {
+            return String(table[mid].name);
+        }
+        if (cmp < 0)
+        {
+            high = mid - 1;
+        }
+        else
+        {
+            low = mid + 1;
+        }
+    }
+    return String("");
+}
+
+static String normalizeAircraftLabel(String label)
+{
+    label.trim();
+    label.replace("Freighter", "");
+    label.replace("freighter", "");
+    label.replace("FREIGHTER", "");
+    label.replace("pax", "");
+    label.replace("PAX", "");
+    label.trim();
+    // Collapse double spaces that might remain after removals.
+    while (label.indexOf("  ") >= 0)
+    {
+        label.replace("  ", " ");
+    }
+    label.trim();
+    const size_t MAX_LEN = 10;
+    if (label.length() > MAX_LEN)
+    {
+        label = label.substring(0, MAX_LEN);
+    }
+    return label;
+}
+
+static String deriveAirlineFromCallsign(const String &callsign)
+{
+    String cs = callsign;
+    cs.trim();
+    // Take leading letters (strip digits/suffix). Most ICAO prefixes are 3 letters; some IATA are 2.
+    String prefix;
+    for (size_t i = 0; i < cs.length(); ++i)
+    {
+        char c = cs[i];
+        if (isalpha(static_cast<unsigned char>(c)))
+            prefix += static_cast<char>(toupper(c));
+        else
+            break;
+    }
+    if (prefix.length() >= 3)
+    {
+        return prefix.substring(0, 3);
+    }
+    if (prefix.length() == 2)
+    {
+        return prefix;
+    }
+    return String("");
+}
 
 FlightDataFetcher::FlightDataFetcher(BaseStateVectorFetcher *stateFetcher,
                                      BaseFlightFetcher *flightFetcher)
@@ -43,25 +123,58 @@ size_t FlightDataFetcher::fetchFlights(std::vector<StateVector> &outStates,
             info.baro_altitude_m = s.baro_altitude;
             info.velocity_mps = s.velocity;
 
-            FlightWallFetcher fw;
+            // Prefer AeroAPI operator_icao mapped to full name; fall back to operator_code; then callsign-derived prefix.
             if (info.operator_icao.length())
             {
-                String airlineFull;
-                if (fw.getAirlineName(info.operator_icao, airlineFull))
+                String opIcao = info.operator_icao;
+                opIcao.trim();
+                String airline = lookupFromTable(kAirlineLookup, kAirlineLookup_COUNT, opIcao);
+                if (airline.length() == 0)
                 {
-                    info.airline_display_name_full = airlineFull;
+                    airline = opIcao; // last-resort code for readability
                 }
+                info.airline_display_name_full = airline;
             }
-            if (info.aircraft_code.length())
+            else if (info.operator_code.length())
             {
-                String aircraftShort, aircraftFull;
-                if (fw.getAircraftName(info.aircraft_code, aircraftShort, aircraftFull))
+                info.airline_display_name_full = info.operator_code;
+            }
+            else
+            {
+                // Derive from callsign prefix if AeroAPI returned nothing.
+                String prefix = deriveAirlineFromCallsign(s.callsign);
+                if (prefix.length())
                 {
-                    if (aircraftShort.length())
+                    String airline = lookupFromTable(kAirlineLookup, kAirlineLookup_COUNT, prefix);
+                    info.airline_display_name_full = airline.length() ? airline : prefix;
+                }
+                else
+                {
+                    // Debug: AeroAPI returned no operator info; log once for visibility.
+                    static int missingOpLogCount = 0;
+                    if (missingOpLogCount < 5)
                     {
-                        info.aircraft_display_name_short = aircraftShort;
+                        Serial.printf("Enrichment: missing operator for ident=%s\n", s.callsign.c_str());
+                        missingOpLogCount++;
                     }
                 }
+            }
+
+            if (info.aircraft_code.length())
+            {
+                String acIcao = info.aircraft_code;
+                acIcao.trim();
+                String aircraftShort = lookupFromTable(kAircraftLookup, kAircraftLookup_COUNT, acIcao);
+                if (aircraftShort.length() == 0)
+                {
+                    aircraftShort = acIcao; // last-resort code
+                }
+                aircraftShort = normalizeAircraftLabel(aircraftShort);
+                if (aircraftShort.length() == 0)
+                {
+                    aircraftShort = acIcao; // ensure non-empty label
+                }
+                info.aircraft_display_name_short = aircraftShort;
             }
             outFlights.push_back(info);
             enriched++;
