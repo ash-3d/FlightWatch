@@ -41,7 +41,7 @@ Firmware for FlightWatch running on ESP32 Trinity, driving a 64x64 HUB75 RGB LED
 ## Project file architecture
 - `src/main.cpp`: Firmware entry, WiFi/captive portal, scheduling, background fetch task, display loop.
 - `core/`: `FlightDataFetcher` orchestrates state vector fetch + enrichment; glue between adapters.
-- `adapters/`: API/display implementations (`OpenSkyFetcher`, `AeroAPIFetcher`, `FlightWallFetcher`, `NeoMatrixDisplay`).
+- `adapters/`: API/display implementations (`OpenSkyFetcher`, `AeroAPIFetcher`, `NeoMatrixDisplay`).
 - `models/`: Data structs for flights, airports, state vectors.
 - `config/`: Defaults and runtime settings (user, WiFi, timing, hardware, API).
 - `utils/`: Helpers (geo math, etc.).

@@ -5,7 +5,7 @@
 namespace UserConfiguration
 {
     // Location configuration
-    static const double CENTER_LAT = 48.1154525; // San Francisco (example)
+    static const double CENTER_LAT = 48.1154525; // Munich (example)
     static const double CENTER_LON = 11.7358584;
     static const double RADIUS_KM = 18.0; // Search radius in km
 
