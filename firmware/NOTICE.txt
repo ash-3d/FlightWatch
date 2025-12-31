@@ -3,6 +3,7 @@ FlightWatch Firmware - Third-Party Notices
 This project includes software developed by the following projects. Licenses are permissive (MIT/BSD/Apache-2.0 style) unless noted; see each project’s repository for full text. Copyrights remain with their respective owners.
 
 - Espressif ESP32 Arduino Core (Arduino-ESP32) — Apache-2.0
+- ESP32 Trinity board, licensed under the CERN Open Hardware Licence v1.2
 - WiFiManager — MIT License
 - ArduinoJson — MIT License
 - FastLED — MIT License
