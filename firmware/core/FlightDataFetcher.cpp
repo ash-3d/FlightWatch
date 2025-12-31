@@ -12,6 +12,81 @@ Output: Returns count of enriched flights and fills outStates/outFlights.
 
 struct LookupEntry { const char *icao; const char *name; };
 
+struct FlightCacheEntry
+{
+    String ident;
+    FlightInfo info;
+    unsigned long cachedMs;
+};
+
+static const unsigned long kFlightCacheTtlMs = 60000UL; // reuse enriched flights for 60s
+static const size_t kMaxAeroFetchPerPass = 2;           // limit AeroAPI calls per fetch pass
+static std::vector<FlightCacheEntry> s_flightCache;
+
+static bool identEqualsIgnoreCase(const String &a, const String &b)
+{
+    return a.equalsIgnoreCase(b);
+}
+
+static void pruneCache(unsigned long nowMs)
+{
+    for (int i = static_cast<int>(s_flightCache.size()) - 1; i >= 0; --i)
+    {
+        long age = static_cast<long>(nowMs - s_flightCache[i].cachedMs);
+        if (age > static_cast<long>(kFlightCacheTtlMs) || age < 0)
+        {
+            s_flightCache.erase(s_flightCache.begin() + i);
+        }
+    }
+}
+
+static bool getCachedFlight(const String &ident, FlightInfo &outInfo, unsigned long nowMs)
+{
+    for (const auto &entry : s_flightCache)
+    {
+        if (identEqualsIgnoreCase(entry.ident, ident))
+        {
+            long age = static_cast<long>(nowMs - entry.cachedMs);
+            if (age <= static_cast<long>(kFlightCacheTtlMs) && age >= 0)
+            {
+                outInfo = entry.info;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void saveCacheEntry(const String &ident, const FlightInfo &info, unsigned long nowMs)
+{
+    for (auto &entry : s_flightCache)
+    {
+        if (identEqualsIgnoreCase(entry.ident, ident))
+        {
+            entry.info = info;
+            entry.cachedMs = nowMs;
+            return;
+        }
+    }
+    FlightCacheEntry fresh;
+    fresh.ident = ident;
+    fresh.info = info;
+    fresh.cachedMs = nowMs;
+    s_flightCache.push_back(fresh);
+}
+
+static bool alreadySeenIdent(const std::vector<String> &seen, const String &ident)
+{
+    for (const auto &s : seen)
+    {
+        if (identEqualsIgnoreCase(s, ident))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Generated full tables (airlines/aircraft) live here; regenerate via tools/generate_lookup_header.py.
 #include "LookupTables.generated.h"
 
@@ -99,6 +174,10 @@ size_t FlightDataFetcher::fetchFlights(std::vector<StateVector> &outStates,
 {
     outStates.clear();
     outFlights.clear();
+    const unsigned long nowMs = millis();
+    pruneCache(nowMs);
+    std::vector<String> seenIdents;
+    size_t aeroFetchesThisPass = 0;
 
     const auto &cfg = RuntimeSettings::current();
     bool ok = _stateFetcher->fetchStateVectors(
@@ -116,9 +195,22 @@ size_t FlightDataFetcher::fetchFlights(std::vector<StateVector> &outStates,
         {
             continue;
         }
-        FlightInfo info;
-        if (_flightFetcher->fetchFlightInfo(s.callsign, info))
+        if (alreadySeenIdent(seenIdents, s.callsign))
         {
+            continue; // skip duplicate ident within the same fetch pass
+        }
+        seenIdents.push_back(s.callsign);
+
+        FlightInfo info;
+        bool cacheHit = getCachedFlight(s.callsign, info, nowMs);
+        if (cacheHit || (aeroFetchesThisPass < kMaxAeroFetchPerPass && _flightFetcher->fetchFlightInfo(s.callsign, info)))
+        {
+            if (!cacheHit)
+            {
+                aeroFetchesThisPass++;
+                saveCacheEntry(s.callsign, info, nowMs);
+            }
+
             // Carry forward live metrics from the state vector
             info.baro_altitude_m = s.baro_altitude;
             info.velocity_mps = s.velocity;

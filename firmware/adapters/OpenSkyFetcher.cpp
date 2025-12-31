@@ -10,6 +10,11 @@ Outputs: Populates outStateVectors with filtered results (distance_km, bearing_d
 */
 #include "adapters/OpenSkyFetcher.h"
 #include "config/RuntimeSettings.h"
+#include <WiFiClientSecure.h>
+#include "utils/NetLock.h"
+
+static unsigned long s_lastTlsFailMs = 0;
+static const unsigned long kTlsBackoffMs = 120000UL; // 2 minutes
 
 static String urlEncodeForm(const String &value)
 {
@@ -85,12 +90,32 @@ bool OpenSkyFetcher::requestAccessToken(String &outToken, unsigned long &outExpi
         return false;
     }
 
+    unsigned long nowMs = millis();
+    if (s_lastTlsFailMs != 0 && nowMs - s_lastTlsFailMs < kTlsBackoffMs)
+    {
+        Serial.println("OpenSkyFetcher: backing off token request after TLS failure");
+        return false;
+    }
+
+    // Avoid starting TLS if heap is tight; try later.
+    if (ESP.getFreeHeap() < 70000 || ESP.getMaxAllocHeap() < 40000)
+    {
+        Serial.printf("OpenSkyFetcher: low heap before token fetch (free=%u, max=%u) -> skip\n",
+                      ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+        return false;
+    }
+
+    static WiFiClientSecure client;
+    client.setInsecure();
     HTTPClient http;
     Serial.print("OpenSkyFetcher: Token URL: ");
     Serial.println(APIConfiguration::OPENSKY_TOKEN_URL);
-    http.begin(APIConfiguration::OPENSKY_TOKEN_URL);
+    http.begin(client, APIConfiguration::OPENSKY_TOKEN_URL);
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
     http.addHeader("Accept", "application/json");
+    http.useHTTP10(true);
+    http.setReuse(false);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
     String body = String("grant_type=client_credentials&client_id=") + urlEncodeForm(cfg.openSkyClientId) +
@@ -109,6 +134,10 @@ bool OpenSkyFetcher::requestAccessToken(String &outToken, unsigned long &outExpi
     String payload = http.getString();
     if (code != 200)
     {
+        if (code < 0)
+        {
+            s_lastTlsFailMs = nowMs;
+        }
         Serial.print("OpenSkyFetcher: Token request failed, code: ");
         Serial.println(code);
         Serial.print("OpenSkyFetcher: Error payload: ");
@@ -169,6 +198,28 @@ bool OpenSkyFetcher::fetchStateVectors(double centerLat,
                                        double radiusKm,
                                        std::vector<StateVector> &outStateVectors)
 {
+    unsigned long nowMs = millis();
+    if (s_lastTlsFailMs != 0 && nowMs - s_lastTlsFailMs < kTlsBackoffMs)
+    {
+        Serial.println("OpenSkyFetcher: backing off state fetch after TLS failure");
+        return false;
+    }
+
+    if (ESP.getFreeHeap() < 70000 || ESP.getMaxAllocHeap() < 40000)
+    {
+        Serial.printf("OpenSkyFetcher: low heap before state fetch (free=%u, max=%u) -> skip\n",
+                      ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+        return false;
+    }
+
+    NetLock::Guard guard(5000);
+    if (!guard.locked())
+    {
+        Serial.println("OpenSkyFetcher: network busy, skipping state fetch");
+        return false;
+    }
+
     // Ensure OAuth token if configured
     if (!ensureAccessToken(false))
     {
@@ -184,14 +235,24 @@ bool OpenSkyFetcher::fetchStateVectors(double centerLat,
                  "&lomin=" + String(lonMin, 6) +
                  "&lomax=" + String(lonMax, 6);
 
+    static WiFiClientSecure client;
+    client.setInsecure();
+
     HTTPClient http;
-    http.begin(url);
+    http.begin(client, url);
     // OAuth Bearer required
     http.addHeader("Authorization", String("Bearer ") + m_accessToken);
+    http.useHTTP10(true);
+    http.setReuse(false);
+    http.setTimeout(15000);
 
     int code = http.GET();
     if (code != 200)
     {
+        if (code < 0)
+        {
+            s_lastTlsFailMs = millis();
+        }
         bool attemptedRefresh = false;
         if (code == 401 && m_accessToken.length() > 0)
         {
@@ -199,9 +260,14 @@ bool OpenSkyFetcher::fetchStateVectors(double centerLat,
             http.end();
             if (ensureAccessToken(true))
             {
+                WiFiClientSecure retryClient;
+                retryClient.setInsecure();
                 HTTPClient retry;
-                retry.begin(url);
+                retry.begin(retryClient, url);
                 retry.addHeader("Authorization", String("Bearer ") + m_accessToken);
+                retry.useHTTP10(true);
+                retry.setReuse(false);
+                retry.setTimeout(15000);
                 code = retry.GET();
                 if (code != 200)
                 {
@@ -210,11 +276,17 @@ bool OpenSkyFetcher::fetchStateVectors(double centerLat,
                     retry.end();
                     return false;
                 }
-                String payload = retry.getString();
-                retry.end();
+                WiFiClient *retryStream = retry.getStreamPtr();
+                if (!retryStream)
+                {
+                    retry.end();
+                    return false;
+                }
+                retryStream->setTimeout(15000);
 
-                DynamicJsonDocument doc(16384);
-                DeserializationError err = deserializeJson(doc, payload);
+                DynamicJsonDocument doc(12288);
+                DeserializationError err = deserializeJson(doc, *retryStream);
+                retry.end();
                 if (err)
                 {
                     Serial.print("OpenSkyFetcher: JSON deserialization error: ");
@@ -290,11 +362,17 @@ bool OpenSkyFetcher::fetchStateVectors(double centerLat,
         }
         return false;
     }
-    String payload = http.getString();
-    http.end();
+    WiFiClient *stream = http.getStreamPtr();
+    if (!stream)
+    {
+        http.end();
+        return false;
+    }
+    stream->setTimeout(15000);
 
-    DynamicJsonDocument doc(16384);
-    DeserializationError err = deserializeJson(doc, payload);
+    DynamicJsonDocument doc(12288);
+    DeserializationError err = deserializeJson(doc, *stream);
+    http.end();
     if (err)
     {
         Serial.print("OpenSkyFetcher: JSON deserialization error: ");

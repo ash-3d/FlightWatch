@@ -71,6 +71,7 @@ static const LookupEntry kAirlineLookup[] = {
     {"AMC", "Air Malta"},
     {"AML", "Air Malawi"},
     {"AMP", "Aero Transporte"},
+    {"AMQ", "Electra Airways"},
     {"AMT", "ATA Airlines"},
     {"AMU", "Air Macau"},
     {"AMW", "Armenia Airways"},

@@ -30,6 +30,7 @@ Configuration: UserConfiguration (location/filters/colors), TimingConfiguration 
 #include "adapters/AeroAPIFetcher.h"
 #include "core/FlightDataFetcher.h"
 #include "adapters/NeoMatrixDisplay.h"
+#include "utils/NetLock.h"
 
 RTC_DATA_ATTR static uint32_t g_resetCounter = 0;
 #ifndef FW_BUILD_ID
@@ -38,6 +39,9 @@ RTC_DATA_ATTR static uint32_t g_resetCounter = 0;
 static const char *const BUILD_ID = FW_BUILD_ID;
 static WebServer g_server(80);
 static bool g_restartAfterConfig = false;
+static bool g_serverActive = false;
+static bool g_serverVisited = false;
+static unsigned long g_serverStartMs = 0;
 
 static OpenSkyFetcher g_openSky;
 static AeroAPIFetcher g_aeroApi;
@@ -286,12 +290,22 @@ static void startSettingsServer()
         MDNS.addService("http", "tcp", 80);
     }
     g_server.on("/", HTTP_GET, []() {
+        g_serverVisited = true;
         g_server.send(200, "text/html", settingsPageHtml());
     });
-    g_server.on("/save", HTTP_POST, handleSettingsSave);
-    g_server.on("/reset", HTTP_POST, handleSettingsReset);
+    g_server.on("/save", HTTP_POST, []() {
+        g_serverVisited = true;
+        handleSettingsSave();
+    });
+    g_server.on("/reset", HTTP_POST, []() {
+        g_serverVisited = true;
+        handleSettingsReset();
+    });
     g_server.begin();
     Serial.println("Settings portal started at http://flightwatch.local/");
+    g_serverActive = true;
+    g_serverVisited = false;
+    g_serverStartMs = millis();
 }
 static bool doubleResetDetected()
 {
@@ -323,6 +337,7 @@ void setup()
 
     RuntimeSettings::load();
     g_flightsMutex = xSemaphoreCreateMutex();
+    NetLock::init();
 
     g_display.initialize();
     g_display.displayStartup();
@@ -457,6 +472,16 @@ void loop()
         lastDisplayTickMs = now;
         g_display.displayFlights(flightsCopy);
     }
-    g_server.handleClient();
+    if (g_serverActive)
+    {
+        g_server.handleClient();
+        if (!g_serverVisited && millis() - g_serverStartMs > 10000UL)
+        {
+            Serial.println("Settings portal timeout; stopping server/MDNS");
+            g_server.stop();
+            MDNS.end();
+            g_serverActive = false;
+        }
+    }
     delay(10);
 }

@@ -31,6 +31,7 @@ Outputs: Visual output to LED matrix using double-buffered DMA.
 #include "config/HardwareConfiguration.h"
 #include "config/TimingConfiguration.h"
 #include "images/flightwatch_logo.h"
+#include "utils/NetLock.h"
 
 namespace
 {
@@ -66,7 +67,7 @@ bool NeoMatrixDisplay::initialize()
         HardwareConfiguration::DISPLAY_CHAIN_LENGTH);
 
     mxconfig.gpio.e      = HardwareConfiguration::DISPLAY_GPIO_E;
-    mxconfig.double_buff = true;
+    mxconfig.double_buff = false; // disable double buffer to free heap for TLS/network
 
     _matrix = new MatrixPanel_I2S_DMA(mxconfig);
     if (_matrix == nullptr)
@@ -239,6 +240,8 @@ String NeoMatrixDisplay::airportCity(const AirportInfo &a) const
 bool NeoMatrixDisplay::fetchWeatherIfNeeded(float &outC, String &outSymbol, uint16_t &outColor)
 {
     const unsigned long CACHE_MS = 10UL * 60UL * 1000UL; // 10 minutes
+    const unsigned long FAIL_RETRY_MS = 2UL * 60UL * 1000UL; // back off on repeated failures
+    static unsigned long s_lastWeatherFailMs = 0;
     unsigned long now = millis();
     if (!isnan(_lastTempC) && _lastWeatherCode >= 0 && now - _lastTempFetchMs < CACHE_MS)
     {
@@ -247,21 +250,35 @@ bool NeoMatrixDisplay::fetchWeatherIfNeeded(float &outC, String &outSymbol, uint
         outColor = _lastWeatherColor;
         return true;
     }
+    if (now - s_lastWeatherFailMs < FAIL_RETRY_MS)
+    {
+        return false; // recent failure; avoid hammering TLS/heap
+    }
 
     if (WiFi.status() != WL_CONNECTED)
     {
         return false;
     }
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    NetLock::Guard guard(500); // low priority: yield quickly if network busy
+    if (!guard.locked())
+    {
+        return false;
+    }
+
+    // Use plain HTTP to avoid TLS RAM spikes on ESP32 for this small request.
+    WiFiClient client;
     HTTPClient http;
 
     const auto &cfg = RuntimeSettings::current();
-    String url = String("https://api.open-meteo.com/v1/forecast?latitude=") +
+    String url = String("http://api.open-meteo.com/v1/forecast?latitude=") +
                  String(cfg.weatherLat, 6) +
                  "&longitude=" + String(cfg.weatherLon, 6) +
                  "&current=temperature_2m,weathercode";
+
+    http.setReuse(false);
+    http.useHTTP10(true);
+    http.addHeader("Accept-Encoding", "identity");
 
     if (!http.begin(client, url))
         return false;
@@ -270,6 +287,7 @@ bool NeoMatrixDisplay::fetchWeatherIfNeeded(float &outC, String &outSymbol, uint
     if (code != 200)
     {
         http.end();
+        s_lastWeatherFailMs = now;
         return false;
     }
 
@@ -280,6 +298,7 @@ bool NeoMatrixDisplay::fetchWeatherIfNeeded(float &outC, String &outSymbol, uint
     DeserializationError err = deserializeJson(doc, payload);
     if (err)
     {
+        s_lastWeatherFailMs = now;
         return false;
     }
 
@@ -351,6 +370,11 @@ bool NeoMatrixDisplay::fetchWeatherIfNeeded(float &outC, String &outSymbol, uint
         outSymbol = _lastWeatherSymbol;
         outColor = _lastWeatherColor;
         ok = true;
+    }
+
+    if (!ok)
+    {
+        s_lastWeatherFailMs = now;
     }
 
     return ok;
