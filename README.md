@@ -2,9 +2,9 @@
 
 FlightWatch is based on the opensource TheFlightWall_OSS project by AxisNimble. FlightWatch is tuned for an ESP32 Trinity driving a single 64x64 HUB75 RGB panel. The firmware prioritizes low RAM usage (single-buffer display, streaming parses, static TLS clients, short-lived portal) while fetching nearby flights.
 
-<video src="images/video1.mp4" controls width="640">
-  Your browser does not support the video tag. You can download the video from `images/video1.mp4`.
-</video>
+![FlightWatch Display 1](images/image1.png)
+
+![FlightWatch Display 2](images/image2.png)
 
 ## Hardware (current build)
 - ESP32 Trinity (HUB75 output)
