@@ -35,6 +35,8 @@ Firmware for FlightWatch running on ESP32 Trinity, driving a 64x64 HUB75 RGB LED
 ### Notes
 - OpenSky OAuth is required for `states/all`. Token auto-refreshes with a safety skew.
 - Display timing/pins are tuned for a single 64x64 HUB75 chain on ESP32 Trinity; adjust if you wire differently.
+- Maximum supported search radius is **18 km**—do not exceed this when configuring location/radius filters.
+- If more than **5 flights** are present in the region, the device may skip newly detected aircraft due to memory pressure.
 
 ## Project file architecture
 - `src/main.cpp`: Firmware entry, WiFi/captive portal, scheduling, background fetch task, display loop.

@@ -1,4 +1,4 @@
-# FlightWatch (ESP32 Trinity + 64x64 HUB75)
+# FlightWatch
 
 FlightWatch is based on the opensource TheFlightWall_OSS project by AxisNimble. FlightWatch is tuned for an ESP32 Trinity driving a single 64x64 HUB75 RGB panel. The firmware prioritizes low RAM usage (single-buffer display, streaming parses, static TLS clients, short-lived portal) while fetching nearby flights.
 
@@ -42,3 +42,33 @@ python tools/generate_lookup_header.py --airlines tools/airlines.json --aircraft
 ## Thanks
 - ADS-B contributors for making flight data available
 - Brian Lough for developing the ESP32 Trinity board
+
+### Disclaimer, Data Sources & Intended Use
+
+- FlightWatch is provided for personal, private, and educational use only
+- Distributed on an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, as defined by the Apache License, Version 2.0
+- Uses third-party data services:
+    OpenSky API (ADS-B state vectors)
+    FlightAware AeroAPI (flight, route, and aircraft enrichment)
+- Users must supply and use their own personal/private account credentials (OpenSky OAuth client_id/secret, AeroAPI key)
+- Third-party services are not provided, proxied, or managed by FlightWatch and remain subject to their respective terms of service
+
+### Data Accuracy & Limitations
+
+- Flight positions, routes, and metadata are sourced from third parties and may be inaccurate, delayed, incomplete, filtered, or unavailable
+- No guarantees are made regarding accuracy, completeness, reliability, or timeliness
+- Displayed data must not be relied upon for real-world decision-making
+
+### Non-Intended and Prohibited Use
+
+- Not certified, approved, or intended for:
+    - Navigation or navigational decision-making
+    - Air traffic control or surveillance
+    - Safety-critical, regulated, or life-critical systems
+    - Commercial, operational, or enterprise monitoring
+
+- Must never be used for aviation safety, regulatory compliance, or commercial purposes
+
+### Limitation of Liability
+
+To the maximum extent permitted by law, the authors and contributors disclaim all liability for any damages arising from the use, misuse, or inability to use this software, associated hardware designs, or any third-party data accessed or displayed
