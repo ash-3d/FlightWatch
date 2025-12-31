@@ -487,6 +487,7 @@ static const LookupEntry kAirlineLookup[] = {
     {"GOW", "Go First"},
     {"GOZ", "Groznyy Avia"},
     {"GPD", "Tradewind Aviation"},
+    {"GPX", "European Air Charter"},
     {"GRL", "Air Greenland"},
     {"GSB", "AsiaCargo Express"},
     {"GSW", "Sky Wings Airlines"},
