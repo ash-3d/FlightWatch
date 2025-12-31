@@ -40,6 +40,8 @@ Firmware for FlightWatch running on ESP32 Trinity, driving a 64x64 HUB75 RGB LED
 - When connecting to the `FlightWatch-Setup` captive portal, put your phone in airplane mode with Wi-Fi enabled so it does not fall back to cellular and drop the portal connection.
 - After the display comes up, you have ~10 seconds to visit `http://flightwatch.local` to add your OpenSky/AeroAPI keys, set your time zone, and configure the flight lookup radius and other preferences.
 
+- To rotate API keys: update `config/APIConfiguration.local.h`, then open `http://flightwatch.local`, enter the new keys in the portal, and save so they replace any values cached in NVS.
+
 ## Project file architecture
 - `src/main.cpp`: Firmware entry, WiFi/captive portal, scheduling, background fetch task, display loop.
 - `core/`: `FlightDataFetcher` orchestrates state vector fetch + enrichment; glue between adapters.
