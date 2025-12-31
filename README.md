@@ -1,6 +1,6 @@
 # FlightWatch (ESP32 Trinity + 64x64 HUB75)
 
-FlightWatch inherits from TheFlightWall but is tuned for an ESP32 Trinity driving a single 64x64 HUB75 RGB panel. The firmware prioritizes low RAM usage (single-buffer display, streaming parses, static TLS clients, short-lived portal) while fetching nearby flights.
+FlightWatch is based on the opensource TheFlightWall_OSS project by AxisNimble. FlightWatch is tuned for an ESP32 Trinity driving a single 64x64 HUB75 RGB panel. The firmware prioritizes low RAM usage (single-buffer display, streaming parses, static TLS clients, short-lived portal) while fetching nearby flights.
 
 ## Hardware (current build)
 - ESP32 Trinity (HUB75 output)
@@ -38,3 +38,7 @@ python tools/generate_lookup_header.py --airlines tools/airlines.json --aircraft
 ## Notes on memory/TLS
 - Single-buffer display frees heap for TLS; streaming parses avoid large payload buffers
 - If TLS failures persist, options: lengthen fetch interval, lower per-pass AeroAPI limit, or re-enable double-buffer only if RAM allows (at the cost of more heap)
+
+## Thanks
+- ADS-B contributors for making flight data available
+- Brian Lough for developing the ESP32 Trinity board
