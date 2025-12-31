@@ -371,6 +371,16 @@ bool NeoMatrixDisplay::fetchWeatherIfNeeded(float &outC, String &outSymbol, uint
         outColor = _lastWeatherColor;
         ok = true;
     }
+    else
+    {
+        // Clear stale symbol if weather code missing
+        _lastWeatherCode = -1;
+        _lastWeatherSymbol = String();
+        _lastWeatherColor = _matrix->color565(
+            UserConfiguration::TEXT_COLOR_R,
+            UserConfiguration::TEXT_COLOR_G,
+            UserConfiguration::TEXT_COLOR_B);
+    }
 
     if (!ok)
     {

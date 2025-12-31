@@ -1,103 +1,40 @@
-# TheFlightWatch
+# FlightWatch (ESP32 Trinity + 64x64 HUB75)
 
-The FlightWatch project is based on the Flight Wall project by jnthas and is licensed under the Apache License 2.0.
-TheFlightWall is an LED wall which shows live information of flights going by your window.
+FlightWatch inherits from TheFlightWall but is tuned for an ESP32 Trinity driving a single 64x64 HUB75 RGB panel. The firmware prioritizes low RAM usage (single-buffer display, streaming parses, static TLS clients, short-lived portal) while fetching nearby flights.
 
-This is the open source version with some basic guides to the panels, mounting them together, data services, and code.
+## Hardware (current build)
+- ESP32 Trinity (HUB75 output)
+- 64x64 HUB75 RGB matrix (single panel)
+- 5V power matched to your panel; follow Trinity pinout in `config/HardwareConfiguration.h`
+- Optional: 3D-printed bracket/enclosure for the single panel
 
+## Data sources
+- OpenSky (OAuth) for ADS-B state vectors (`states/all`)
+- FlightAware AeroAPI for route/airline/aircraft enrichment (filtered, cached)
+- Embedded airline/aircraft lookup tables (no CDN)
 
-# Component List
-- Main components
-    - 20x [16x16 LED panels](https://www.aliexpress.us/item/2255800358269772.html)
-    - ESP32 dev board (we used the [R32 D1](https://www.amazon.com/HiLetgo-ESP-32-Development-Bluetooth-Arduino/dp/B07WFZCBH8) but any ESP dev board should work)
-    - 3D printed brackets (or MDF / cardboard)
-    - 2x 6ft wooden trim pieces (for support)
-- Power
-    - [5V >20A power supply](https://www.amazon.com/dp/B07KC55TJF) (for 20 panels)
-    - [3.3V - 5V voltage level shifter](https://www.amazon.com/dp/B07F7W91LC)
-- Data
-    - [OpenSky](https://opensky-network.org/) for ADS-B flight data
-    - [FlightAware AeroAPI](https://www.flightaware.com/commercial/aeroapi/) for route, aircraft, and airline information
+## Firmware behavior
+- Fetch cadence: `TimingConfiguration::FETCH_INTERVAL_SECONDS` (default 30s)
+- OpenSky: static TLS client, streaming JSON parse, heap guard (skips if heap is low), 2-minute TLS backoff after failure
+- AeroAPI: static TLS client, stream parse with filter, per-pass limit (2 calls), 20s TLS backoff, 60s enrichment cache
+- Weather: idle-only, plain HTTP (no TLS), short backoff; clears stale symbol if weather code is missing
+- Portal: `flightwatch.local` available for 10 seconds after boot; shuts down if unused to free MDNS/HTTP resources
+- Display: single-buffered HUB75 (double buffer disabled to save RAM); slight tearing possible; scroll/tick rate adjustable in `NeoMatrixDisplay`
 
-# Hardware
-
-## Dimensions
-
-With 20 panels (10x2) - ~63 inches x ~12.6 inches
-
-## LED Panels
-[These are the LED panels we used](https://www.aliexpress.us/item/2255800358269772.html), but any similar LED matrix should work.
-
-We designed 3D printable brackets to attach the panels together, this is one approach, but you could also use MDF board or even cardboard (as we did originally haha)
-
-Then two 63 inch horizontal supports for extra strength. We bought wooden floor trim and cut it to size.
+## Setup
+1) WiFi: Captive portal via WiFiManager; defaults in `config/WiFiConfiguration.h`
+2) Location/display: Set in `config/UserConfiguration.h` (center lat/lon, radius, units, colors, brightness)
+3) Hardware: HUB75 pin/size in `config/HardwareConfiguration.h`
+4) API keys: `config/APIConfiguration.h` (OpenSky OAuth client_id/secret, AeroAPI key)
+5) Lookup tables: edit `tools/airlines.json` / `tools/aircraft.json`, then regenerate:
+python tools/generate_lookup_header.py --airlines tools/airlines.json --aircraft tools/aircraft.json --out core/LookupTables.generated.h
 
 
-Obviously this is just one way to hold them together, but we're sure there are better ways!
+## Build & flash
+- PlatformIO project (`platformio.ini`); ensure `utils/*.cpp` is included (NetLock)
+- Open the `firmware` folder in VS Code with the PlatformIO extension
+- Click Upload to flash the ESP32 Trinity
 
-## Wiring
-
-Here is a wiring diagram for how to connect the whole system together.
-
-
-The entire panel is controlled by one data line - simple electronics in exchange for very low refresh rates, don't expect any 60 FPS gaming on this panel!
-
-# Data and Software
-
-## Data API Keys
-
-The data for this project consists of two main data sources:
-1. Core public [ADS-B](https://en.wikipedia.org/wiki/Automatic_Dependent_Surveillance%E2%80%93Broadcast) data for flight positions and callsigns - using [OpenSky](https://opensky-network.org)
-2. Flight information lookup - aircraft, airline, and route (origin/destination airport). This is typically the hardest / most expensive information to find. Using [FlightAware AeroAPI](https://flightaware.com/aeroapi)
-
-### Setting up OpenSky
-1. Register for an [OpenSky](https://opensky-network.org/) account
-2. Go to your [account page](https://opensky-network.org/my-opensky/account)
-3. Create a new API client and copy the `client_id` and `client_secret` to the [APIConfiguration.h](firmware/config/APIConfiguration.h) file
-
-
-### Setting up AeroAPI
-1. Go to the [FlightAware AeroAPI]([https://flightaware.com/aeroapi](https://flightaware.com/aeroapi)) page and create a personal account
-3. From the dashboard, open **API Keys**, click **Create API Key** and follow the steps
-8. Copy the generated key and add it to [APIConfiguration.h](firmware/config/APIConfiguration.h)
-
-
-## Software Setup
-
-### Set your WiFi
-
-WiFi credentials are collected via WiFiManager captive portal. Adjust the portal SSID/password/timeouts in [WiFiConfiguration.h](firmware/config/WiFiConfiguration.h) if you want to change the defaults.
-
-### Set your location
-
-Set your location to track flights by updating the following values in [UserConfiguration.h](firmware/config/UserConfiguration.h):
-
-- `CENTER_LAT`: Latitude of the center point to track (e.g., your home or city)
-- `CENTER_LON`: Longitude of the center point
-- `RADIUS_KM`: Search radius in kilometers for flights to include
-
-### Build and flash with PlatformIO
-
-The firmware can be built and uploaded to the ESP32 using [PlatformIO](https://platformio.org/)
-
-1. **Install PlatformIO**: 
-   - Install [VS Code](https://code.visualstudio.com/)
-   - Add the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode)
-
-2. **Configure your settings**:
-   - Add your API keys to [APIConfiguration.h](firmware/config/APIConfiguration.h)
-   - (Optional) Adjust captive portal defaults in [WiFiConfiguration.h](firmware/config/WiFiConfiguration.h)
-   - Set your location (and optional display preferences) in [UserConfiguration.h](firmware/config/UserConfiguration.h)
-   - Adjust display hardware (pin, tile layout) in [HardwareConfiguration.h](firmware/config/HardwareConfiguration.h)
-
-3. **Build and upload**:
-   - Open the `firmware` folder in PlatformIO
-   - Connect your ESP32 via USB
-   - Click the "Upload" button (→) in the PlatformIO toolbar
-
-### Customization
-
-- **Brightness**: Controls overall display brightness (0–255)
-  - Edit `DISPLAY_BRIGHTNESS` in [UserConfiguration.h](firmware/config/UserConfiguration.h)
-- **Text color**: RGB values used for all text/borders
-  - Edit `TEXT_COLOR_R`, `TEXT_COLOR_G`, `TEXT_COLOR_B` in [UserConfiguration.h](firmware/config/UserConfiguration.h)
+## Notes on memory/TLS
+- Single-buffer display frees heap for TLS; streaming parses avoid large payload buffers
+- If TLS failures persist, options: lengthen fetch interval, lower per-pass AeroAPI limit, or re-enable double-buffer only if RAM allows (at the cost of more heap)
