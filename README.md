@@ -3,8 +3,10 @@
 FlightWatch is based on the opensource TheFlightWall_OSS project by AxisNimble. FlightWatch is tuned for an ESP32 Trinity driving a single 64x64 HUB75 RGB panel. The firmware prioritizes low RAM usage (single-buffer display, streaming parses, static TLS clients, short-lived portal) while fetching nearby flights.
 
 <p>
-  <img src="images/image1.jpg" alt="FlightWatch Display 1" width="15%" style="display:inline-block; margin-right:12px;">
-  <img src="images/image2.jpg" alt="FlightWatch Display 2" width="15%" style="display:inline-block;">
+  <img src="images/gif1.gif" alt="FlightWatch Animation 1" width="20%" style="display:inline-block; margin-right:14px;">
+  <img src="images/gif2.gif" alt="FlightWatch Animation 2" width="20%" style="display:inline-block; margin-right:14px;">
+  <img src="images/image1.jpg" alt="FlightWatch Display 1" width="20%" style="display:inline-block; margin-right:14px;">
+  <img src="images/image2.jpg" alt="FlightWatch Display 2" width="20%" style="display:inline-block;">
 </p>
 
 ## Hardware (current build)
@@ -61,7 +63,7 @@ and to many more who developed so many useful libraries without that this projec
 - Uses third-party data services:
     OpenSky API (ADS-B state vectors)
     FlightAware AeroAPI (flight, route, and aircraft enrichment)
-- Users must supply and use their own personal/private account credentials (OpenSky OAuth client_id/secret, AeroAPI key)
+- Users must supply and use their own personal/private account credentials (OpenSky OAuth client_id/secret, AeroAPI key). Please be aware of the API query fees for AeroAPI(Even for personal or research purpose).
 - Third-party services are not provided, proxied, or managed by FlightWatch and remain subject to their respective terms of service
 
 ### Data Accuracy & Limitations
